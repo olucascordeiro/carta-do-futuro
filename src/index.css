@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background-dark text-text-primary font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-all duration-300;
+  }
+  
+  .btn-primary {
+    @apply btn bg-primary text-white hover:bg-primary-light hover:shadow-glow-primary;
+  }
+  
+  .btn-secondary {
+    @apply btn bg-secondary text-white hover:bg-secondary-light;
+  }
+  
+  .btn-outline {
+    @apply btn border border-primary text-white hover:bg-primary/10;
+  }
+  
+  .card {
+    @apply bg-background-light rounded-lg p-6 shadow-md hover:shadow-glow transition-shadow duration-300;
+  }
+  
+  .input {
+    @apply bg-background-dark border border-secondary/30 rounded-md px-4 py-2 text-text-primary focus:outline-none focus:border-secondary focus:ring-1 focus:ring-secondary/50 transition-all duration-200;
+  }
+  
+  .textarea {
+    @apply input min-h-[150px] resize-y;
+  }
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Date picker customization */
+input[type="date"] {
+  @apply input;
+  color-scheme: dark;
+}
