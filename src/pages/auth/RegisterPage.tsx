@@ -3,17 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { loadStripe } from '@stripe/stripe-js';
+// loadStripe não é necessário para MP com init_point
 import MainLayout from '../../components/layout/MainLayout';
 import Card from '../../components/common/Card';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
-import { Mail, Lock, ArrowRight } from 'lucide-react'; // UserIcon removido
-
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY!);
+import { Mail, Lock, ArrowRight } from 'lucide-react'; // UserIcon removido, pois não estava sendo usado
 
 const RegisterPage: React.FC = () => {
-  const { register, authState, isAuthenticated } = useAuth(); // Removido user: authUser daqui
+  const { register, authState, isAuthenticated } = useAuth();
   const user = authState.user; // Pega user de authState
   const navigate = useNavigate();
   const location = useLocation();
@@ -31,59 +29,65 @@ const RegisterPage: React.FC = () => {
     general: '',
   });
 
-  const [isRedirectingToCheckout, setIsRedirectingToCheckout] = useState(false);
+  const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
 
-  const startCheckout = async (priceId: string) => {
-    setIsRedirectingToCheckout(true);
+  const startMercadoPagoCheckout = async (planIdentifier: string) => {
+    setIsProcessingCheckout(true);
     setFormErrors(prev => ({ ...prev, general: ''}));
 
-    if (!user) { // Usando 'user' do authState
-        setFormErrors(prev => ({ ...prev, general: 'Erro ao obter dados do usuário para o pagamento. Tente fazer login e comprar pela página de planos.'}));
-        setIsRedirectingToCheckout(false);
+    if (!user) {
+        const noUserError = 'Erro ao obter dados do usuário para o pagamento. Tente fazer login e comprar novamente.';
+        setFormErrors(prev => ({ ...prev, general: noUserError}));
+        setIsProcessingCheckout(false); // <<< CORRIGIDO DE NULL PARA FALSE
+        console.error("[RegisterPage] Tentativa de checkout sem usuário no authState.");
         return;
     }
 
     try {
-      console.log(`[RegisterPage] Chamando create-checkout-session para usuário ${user.id} e priceId ${priceId}`);
-      const { data, error: functionError } = await supabase.functions.invoke('create-checkout-session', {
-        body: { priceId: priceId },
+      console.log(`[RegisterPage] Usuário ${user.id} autenticado. Chamando create-mp-preference para: ${planIdentifier}`);
+      const { data, error: functionError } = await supabase.functions.invoke('create-mp-preference', {
+        body: { planIdentifier: planIdentifier },
       });
 
-      if (functionError) throw new Error(`Erro da função de checkout: ${functionError.message || JSON.stringify(functionError)}`);
-      if (!data || !data.sessionId) throw new Error('Session ID do checkout não foi recebido.');
-
-      const stripe = await stripePromise;
-      if (!stripe) throw new Error('Stripe.js não carregou.');
-
-      console.log("[RegisterPage] Redirecionando para Stripe Checkout com session ID:", data.sessionId);
-      const { error: stripeError } = await stripe.redirectToCheckout({ sessionId: data.sessionId });
-      
-      if (stripeError) {
-        console.error("[RegisterPage] Erro ao redirecionar para o Stripe Checkout:", stripeError);
-        setFormErrors(prev => ({ ...prev, general: stripeError.message || "Ocorreu um erro durante o redirecionamento para o pagamento."}));
+      if (functionError) {
+        let detailedError = `Erro da função de checkout: ${functionError.message || JSON.stringify(functionError)}`;
+        if (typeof functionError === 'object' && functionError !== null && 'error' in functionError) {
+             detailedError = (functionError as any).error?.message || JSON.stringify(functionError);
+        }
+        throw new Error(detailedError);
       }
+      if (!data || !data.initPoint) { // Apenas initPoint é crucial para redirecionamento direto
+        console.error("[RegisterPage] Resposta da função create-mp-preference inválida ou sem initPoint. Data:", data);
+        throw new Error('Resposta inválida do servidor ao criar preferência de pagamento (sem initPoint).');
+      }
+
+      console.log("[RegisterPage] Redirecionando para Mercado Pago init_point:", data.initPoint);
+      window.location.href = data.initPoint;
+      // O setIsProcessingCheckout(false) não será chamado se o redirecionamento ocorrer
     } catch (e: any) {
       console.error("[RegisterPage] Erro ao processar o início do checkout:", e);
       setFormErrors(prev => ({ ...prev, general: e.message || "Falha ao iniciar o processo de pagamento."}));
-    } finally {
-      setIsRedirectingToCheckout(false);
+      setIsProcessingCheckout(false); // <<< CORRIGIDO DE NULL PARA FALSE
     }
   };
 
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
-    const priceIdFromUrl = queryParams.get('priceId');
+    const planIdentifierFromUrl = queryParams.get('planIdentifier');
+    const planNameFromUrl = queryParams.get('planName');
     
-    // Usando 'user' do authState
-    if (priceIdFromUrl && isAuthenticated && user && user.planType === 'none' && !authState.isLoading) {
-      console.log(`[RegisterPage] Usuário autenticado (planType: ${user.planType}), iniciando checkout para priceId da URL: ${priceIdFromUrl}`);
+    console.log("[RegisterPage useEffect] Verificando. Autenticado:", isAuthenticated, "User Plan:", user?.planType, "isLoading Auth:", authState.isLoading, "PriceID URL:", planIdentifierFromUrl);
+
+    if (planIdentifierFromUrl && planNameFromUrl && isAuthenticated && user && user.planType === 'none' && !authState.isLoading && !isProcessingCheckout) {
+      console.log(`[RegisterPage useEffect] CONDIÇÕES ATENDIDAS. Iniciando checkout para: ${planIdentifierFromUrl}`);
       navigate(location.pathname, { replace: true }); 
-      startCheckout(priceIdFromUrl);
+      startMercadoPagoCheckout(planIdentifierFromUrl);
+    } else {
+      console.log("[RegisterPage useEffect] Condições para checkout automático NÃO atendidas.");
     }
-  }, [isAuthenticated, user, location, navigate, authState.isLoading]);
+  }, [isAuthenticated, user, location, navigate, authState.isLoading, isProcessingCheckout]);
 
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { /* ... como antes ... */ 
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
     if (formErrors[name as keyof typeof formErrors]) {
@@ -92,31 +96,14 @@ const RegisterPage: React.FC = () => {
      setFormErrors(prev => ({ ...prev, general: ''}));
   };
   
-  const validateForm = () => {
+  const validateForm = () => { /* ... como antes ... */ 
     let valid = true;
     const newErrors = { email: '', password: '', confirmPassword: '', general: '' };
-    
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email é obrigatório';
-      valid = false;
-    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      newErrors.email = 'Email inválido';
-      valid = false;
-    }
-    
-    if (!formData.password) {
-      newErrors.password = 'Senha é obrigatória';
-      valid = false;
-    } else if (formData.password.length < 6) {
-      newErrors.password = 'Senha deve ter pelo menos 6 caracteres';
-      valid = false;
-    }
-    
-    if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = 'As senhas não coincidem';
-      valid = false;
-    }
-    
+    if (!formData.email.trim()) { newErrors.email = 'Email é obrigatório'; valid = false; }
+    else if (!/\S+@\S+\.\S+/.test(formData.email)) { newErrors.email = 'Email inválido'; valid = false; }
+    if (!formData.password) { newErrors.password = 'Senha é obrigatória'; valid = false; }
+    else if (formData.password.length < 6) { newErrors.password = 'Senha deve ter pelo menos 6 caracteres'; valid = false; }
+    if (formData.password !== formData.confirmPassword) { newErrors.confirmPassword = 'As senhas não coincidem'; valid = false; }
     setFormErrors(newErrors);
     return valid;
   };
@@ -125,26 +112,27 @@ const RegisterPage: React.FC = () => {
     e.preventDefault();
     setFormErrors(prev => ({ ...prev, general: ''}));
     
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
     
     try {
+      console.log("[RegisterPage handleSubmit] Chamando register do AuthContext...");
       await register(formData.email, formData.password);
+      console.log("[RegisterPage handleSubmit] Registro no AuthContext CONCLUÍDO (sem erro lançado).");
       
       const queryParams = new URLSearchParams(location.search);
-      if (!queryParams.get('priceId')) {
-         navigate('/dashboard/plano'); 
+      if (!queryParams.get('planIdentifier') && !isProcessingCheckout) { 
+          console.log("[RegisterPage handleSubmit] Sem planIdentifier na URL e não processando checkout, navegando para /dashboard/plano");
+          navigate('/dashboard/plano');
       }
-      // Se veio da página de preços, o useEffect cuidará do checkout.
-
+      // Se tem planIdentifier, o useEffect cuidará do checkout.
     } catch (error: any) {
-      console.error('Erro no registro (RegisterPage):', error);
+      console.error('[RegisterPage handleSubmit] Erro no registro CAPTURADO:', error);
       setFormErrors(prev => ({ ...prev, general: error.message || 'Falha no registro. Verifique os dados ou tente um email diferente.'}));
     }
   };
   
   return (
+    // ... JSX do formulário de registro como antes, ele estava bom ...
     <MainLayout hideFooter>
       <div className="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
@@ -203,8 +191,8 @@ const RegisterPage: React.FC = () => {
               <Button
                 type="submit"
                 className="w-full flex items-center justify-center"
-                isLoading={authState.isLoading || isRedirectingToCheckout}
-                disabled={authState.isLoading || isRedirectingToCheckout}
+                isLoading={authState.isLoading || isProcessingCheckout}
+                disabled={authState.isLoading || isProcessingCheckout}
               >
                 <span>Criar Conta e Continuar</span>
                 <ArrowRight className="ml-2 w-4 h-4" />
