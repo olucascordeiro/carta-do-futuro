@@ -1,7 +1,7 @@
 {
-  "files": [],
-  "references": [
+  "files": [], // Correto, não compila nada diretamente
+  "references": [ // Correto, aponta para os configs específicos
     { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
+    { "path": "./tsconfig.node.json" } // Para coisas como vite.config.ts
   ]
 }

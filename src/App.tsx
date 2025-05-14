@@ -10,7 +10,7 @@ import RegisterPage from './pages/auth/RegisterPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import NewLetterPage from './pages/dashboard/NewLetterPage';
 import ProfilePage from './pages/dashboard/ProfilePage';
-import SubscriptionPage from './pages/dashboard/SubscriptionPage';
+import PlanPage from './pages/dashboard/PlanPage';
 
 // Auth Guard Component
 import { useAuth } from './contexts/AuthContext';
@@ -58,7 +58,7 @@ const AppRoutes: React.FC = () => {
       } />
       <Route path="/dashboard/subscription" element={
         <ProtectedRoute>
-          <SubscriptionPage />
+          <PlanPage />
         </ProtectedRoute>
       } />
       
