@@ -1,25 +1,26 @@
 // src/pages/dashboard/PlanPage.tsx
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom'; // Adicionado Link
+import { useNavigate, Link } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase'; // Importar supabase
-import { Award, ShoppingCart, Tag, AlertCircle } from 'lucide-react'; // Adicionado AlertCircle
+import { supabase } from '../../lib/supabase';
+import { Award, ShoppingCart, Tag, AlertCircle } from 'lucide-react';
 
 const PlanPage: React.FC = () => {
   const { authState } = useAuth();
   const navigate = useNavigate();
   const { user } = authState;
 
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false); // Renomeado de isUpgrading para ser mais genérico
+  // Um estado de loading para todos os botões de pagamento/upgrade nesta página
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
 
-  // Identificadores dos planos (devem corresponder aos da Edge Function e do .env para o frontend)
-  const PLAN_ID_BASICO_RENEW = import.meta.env.VITE_STRIPE_PRICE_ID_BASICO!; // Ou como você nomeou sua var de ambiente para o preço do básico
-  const PLAN_ID_FULL_FROM_EXPIRED_BASIC = import.meta.env.VITE_STRIPE_PRICE_ID_COMPLETO!; // Preço cheio do completo
-  const PLAN_ID_UPGRADE = import.meta.env.VITE_STRIPE_PRICE_ID_UPGRADE!; // Preço do upgrade (R$7)
+  // Identificadores dos planos (devem corresponder aos da Edge Function create-mp-preference)
+  const PLAN_ID_BASICO_MP = 'basic_plan_23';       // Para recompra do plano básico (R$23)
+  const PLAN_ID_COMPLETO_MP = 'full_plan_30';      // Para comprar o completo se o básico expirou (R$30)
+  const PLAN_ID_UPGRADE_MP = 'upgrade_basic_to_full_7'; // Para upgrade do básico ativo para completo (R$7)
 
   const formatDate = (date: Date | null | undefined): string => {
     if (!date) return 'N/D';
@@ -46,15 +47,14 @@ const PlanPage: React.FC = () => {
     planStatusText = "Ativo";
     planStatusColor = 'bg-yellow-500/20 text-yellow-400';
   }
-
-  // Função genérica para iniciar checkout, usada por vários botões
-  const startCheckout = async (planIdentifierForFunction: string, buttonLoadingStateSetter: React.Dispatch<React.SetStateAction<boolean>>) => {
+  
+  const startMercadoPagoCheckout = async (planIdentifierForFunction: string) => {
     if (!user) {
-      setGeneralError("Usuário não autenticado.");
+      setGeneralError("Usuário não autenticado. Por favor, faça login novamente.");
       return;
     }
     setGeneralError(null);
-    buttonLoadingStateSetter(true);
+    setIsProcessingPayment(true);
 
     try {
       console.log(`[PlanPage] Usuário ${user.id}. Chamando create-mp-preference para: ${planIdentifierForFunction}`);
@@ -62,19 +62,30 @@ const PlanPage: React.FC = () => {
         body: { planIdentifier: planIdentifierForFunction },
       });
 
-      if (functionError) throw new Error(functionError.message || JSON.stringify(functionError));
-      if (!data || !data.initPoint) throw new Error('Resposta inválida do servidor (sem initPoint).');
+      if (functionError) {
+        let detailedError = `Erro ao invocar função de checkout: ${functionError.message || JSON.stringify(functionError)}`;
+        if (typeof functionError === 'object' && functionError !== null && 'error' in functionError && (functionError as any).error?.message) {
+             detailedError = (functionError as any).error.message;
+        }
+        throw new Error(detailedError);
+      }
+      if (!data || !data.initPoint) {
+        throw new Error('Resposta inválida do servidor (sem init_point do Mercado Pago).');
+      }
 
+      console.log("[PlanPage] Redirecionando para Mercado Pago init_point:", data.initPoint);
       window.location.href = data.initPoint;
+      // Se o redirecionamento ocorrer, o setIsProcessingPayment(false) no finally não será chamado, o que é ok.
     } catch (e: any) {
       console.error("[PlanPage] Erro ao processar checkout:", e);
       setGeneralError(e.message || "Falha ao iniciar o processo de pagamento.");
-      buttonLoadingStateSetter(false);
+      setIsProcessingPayment(false); // Limpa o loading em caso de erro antes do redirecionamento
     }
-    // Não resetar loading no finally se houve redirecionamento
+    // Não colocar setIsProcessingPayment(false) no finally aqui, pois o redirecionamento deve acontecer.
+    // Se o redirecionamento falhar, o catch já lida com isso.
   };
   
-  const handleChoosePlan = () => { navigate('/#pricing'); };
+  const handleChoosePlan = () => { navigate('/#pricing'); }; // Para usuários com planType 'none'
 
   const basicFeatures = [
     "Cartas apenas com texto",
@@ -93,7 +104,7 @@ const PlanPage: React.FC = () => {
   let planNameDisplay = "Nenhum plano ativo";
   let planDescription = "Você ainda não possui um plano ativo. Escolha um para começar!";
 
-  if (user) { // Garante que user não é nulo para as próximas checagens
+  if (user) {
     if (user.planType === 'basic') {
       planNameDisplay = "Plano Básico";
       currentPlanFeatures = basicFeatures;
@@ -109,7 +120,7 @@ const PlanPage: React.FC = () => {
     }
   }
 
-
+  // Lógica de Retorno Antecipado (Loading, !user)
   if (authState.isLoading) {
     return (
       <DashboardLayout>
@@ -120,12 +131,12 @@ const PlanPage: React.FC = () => {
     );
   }
 
-  if (!user) { // Se, mesmo após o loading, o user for nulo (erro no AuthContext)
+  if (!user) {
     return (
       <DashboardLayout>
         <div className="text-center max-w-md mx-auto py-10">
             <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
-            <h2 className="text-xl font-semibold mb-2">Erro na Autenticação</h2>
+            <h2 className="text-xl font-semibold mb-2">Autenticação Necessária</h2>
             <p className="text-text-secondary mb-6">
             Não foi possível carregar os dados do seu plano. Por favor, tente fazer login novamente.
             </p>
@@ -135,7 +146,7 @@ const PlanPage: React.FC = () => {
     );
   }
 
-  // A partir daqui, user é garantidamente não-nulo.
+  // Renderização Principal da Página
   return (
     <DashboardLayout>
       <div className="mb-8">
@@ -164,7 +175,7 @@ const PlanPage: React.FC = () => {
                 <Tag size={48} className="text-text-muted mx-auto mb-4" />
                 <h3 className="text-xl font-semibold mb-2">{planNameDisplay}</h3>
                 <p className="text-text-secondary mb-6">{planDescription}</p>
-                <Button onClick={handleChoosePlan} size="lg">
+                <Button onClick={handleChoosePlan} size="lg" disabled={isProcessingPayment}>
                   Escolher um Plano
                 </Button>
               </div>
@@ -206,9 +217,9 @@ const PlanPage: React.FC = () => {
                         ? "Para continuar criando cartas ou obter acesso vitalício e todas as funcionalidades, escolha uma opção abaixo."
                         : "Desbloqueie o acesso vitalício, cartas com mídia e todos os benefícios do Plano Completo pagando apenas a diferença de R$ 7,00."}
                     </p>
-                    {isPlanExpired && (
+                    {isPlanExpired && ( 
                       <Button 
-                        onClick={() => startCheckout('basic_plan_23', setIsProcessingPayment)} // Assumindo 'basic_plan_23' é o ID para recompra do básico
+                        onClick={() => startMercadoPagoCheckout(PLAN_ID_BASICO_MP)} 
                         className="w-full sm:w-auto mb-3" 
                         variant='outline'
                         isLoading={isProcessingPayment}
@@ -218,7 +229,7 @@ const PlanPage: React.FC = () => {
                       </Button>
                     )}
                     <Button 
-                      onClick={() => startCheckout(isPlanExpired ? 'full_plan_30' : PLAN_ID_UPGRADE, setIsProcessingPayment)} 
+                      onClick={() => startMercadoPagoCheckout(isPlanExpired ? PLAN_ID_COMPLETO_MP : PLAN_ID_UPGRADE_MP)} 
                       className="w-full sm:w-auto" 
                       variant="primary" 
                       size="lg"
@@ -239,7 +250,6 @@ const PlanPage: React.FC = () => {
           <div className="lg:col-span-1">
             <Card className="bg-background-dark sticky top-24">
               <h2 className="text-xl font-serif mb-6 border-b border-primary/10 pb-4">Resumo da Conta</h2>
-              {/* ... JSX do Resumo da Conta como antes ... */}
               <div className="space-y-5">
                 <div>
                   <h3 className="text-text-muted text-sm font-medium mb-1">Tipo do Plano</h3>
