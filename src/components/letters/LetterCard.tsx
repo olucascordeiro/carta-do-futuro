@@ -1,131 +1,111 @@
+// src/components/letters/LetterCard.tsx
 import React from 'react';
 import { Letter } from '../../types';
-import Card from '../common/Card';
 import Button from '../common/Button';
-import { Calendar, ImageIcon, Trash2, Edit, Clock } from 'lucide-react';
-import { useLetters } from '../../contexts/LetterContext';
+import Card from '../common/Card';
+import { Trash2, Eye, AlertCircle, Clock, CheckCircle2 } from 'lucide-react'; // Edit removido, Eye adicionado
 
-interface LetterCardProps {
+export interface LetterCardProps {
   letter: Letter;
-  onEdit?: (id: string) => void;
+  onDelete?: () => void;
+  onView?: (letter: Letter) => void; // Para abrir a carta completa
+  // onEdit removido pois não há edição para cartas agendadas/entregues
 }
 
-const LetterCard: React.FC<LetterCardProps> = ({ letter, onEdit }) => {
-  const { deleteLetter } = useLetters();
+const LetterCard: React.FC<LetterCardProps> = ({ letter, onDelete, onView }) => {
   
-  const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-  
-  const getDaysRemaining = (deliveryDate: Date) => {
-    const today = new Date();
-    const delivery = new Date(deliveryDate);
-    const diffTime = delivery.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
-  
-  const daysRemaining = getDaysRemaining(letter.deliveryDate);
-  
-  const getStatusColor = (status: string) => {
-    switch (status) {
+  const getStatusStylesAndInfo = () => {
+    // ... (sua lógica getStatusStylesAndInfo como antes) ...
+    // Garanta que ela retorne os estilos corretos para 'scheduled', 'delivered', 'failed'
+    // Exemplo para 'delivered':
+    // case 'delivered':
+    //   return { 
+    //     cardClasses: 'bg-background-light border-green-500/30',
+    //     statusText: 'Entregue',
+    //     statusColor: 'text-green-400 bg-green-500/20',
+    //     icon: <CheckCircle2 size={14} className="mr-1.5" />
+    //   };
+    // ... (etc.)
+    // Vou usar a sua implementação anterior que já estava boa para isso.
+    switch (letter.status) {
       case 'scheduled':
-        return 'text-yellow-500';
+        return { 
+          cardClasses: 'opacity-60 bg-gray-800 border-gray-700',
+          statusText: 'Agendada',
+          statusColor: 'text-yellow-400 bg-yellow-500/20',
+          icon: <Clock size={14} className="mr-1.5" /> 
+        };
       case 'delivered':
-        return 'text-green-500';
-      case 'expired':
-        return 'text-red-500';
+        return { 
+          cardClasses: 'bg-background-light border-green-500/30',
+          statusText: 'Entregue',
+          statusColor: 'text-green-400 bg-green-500/20',
+          icon: <CheckCircle2 size={14} className="mr-1.5" />
+        };
+      case 'failed':
+        return { 
+          cardClasses: 'bg-background-light border-red-500/30',
+          statusText: 'Falha no Envio',
+          statusColor: 'text-red-400 bg-red-500/20',
+          icon: <AlertCircle size={14} className="mr-1.5" />
+        };
       default:
-        return 'text-text-secondary';
+        return { 
+          cardClasses: 'bg-background-light',
+          statusText: letter.status,
+          statusColor: 'text-gray-400 bg-gray-500/20',
+          icon: null 
+        };
     }
   };
-  
-  const handleDelete = async () => {
-    if (window.confirm('Are you sure you want to delete this letter?')) {
-      await deleteLetter(letter.id);
-    }
-  };
-  
+
+  const { cardClasses, statusText, statusColor, icon: StatusIcon } = getStatusStylesAndInfo();
+
   return (
-    <Card 
-      className="relative group transition-all duration-300 overflow-hidden"
-      hover={true}
-      glow={letter.status === 'scheduled'}
-    >
-      <div className="flex justify-between mb-4">
-        <h3 className="text-xl font-serif truncate">
-          {letter.title || 'Untitled Letter'}
-        </h3>
-        <div className={`flex items-center ${getStatusColor(letter.status)}`}>
-          <span className="text-sm capitalize">{letter.status}</span>
-        </div>
-      </div>
-      
-      <div className="mb-4 text-text-secondary line-clamp-3 text-sm h-16">
-        {letter.body}
-      </div>
-      
-      <div className="flex items-center text-text-muted text-sm mb-4">
-        <Calendar size={14} className="mr-1" />
-        <span>Delivery: {formatDate(letter.deliveryDate)}</span>
-        
-        {letter.mediaUrl && (
-          <span className="ml-3 flex items-center">
-            <ImageIcon size={14} className="mr-1" />
-            Media attached
+    <Card className={`relative group transition-all duration-300 overflow-hidden ${cardClasses}`}>
+      <div className="p-4 flex flex-col h-full">
+        <div className="flex justify-between items-start mb-3">
+          <h3 className="text-lg font-serif truncate pr-2 flex-grow">
+            {letter.status === 'scheduled' 
+              ? `Carta Agendada` 
+              : (letter.title || 'Carta Sem Título')}
+          </h3>
+          <span className={`text-xs font-semibold px-2 py-1 rounded-full flex items-center whitespace-nowrap ${statusColor}`}>
+            {StatusIcon}
+            {statusText}
           </span>
+        </div>
+
+        {letter.status !== 'scheduled' && ( // Mostra corpo para delivered e failed
+          <p className="text-sm text-gray-300 line-clamp-3 mb-3 flex-grow min-h-[60px]">
+            {letter.status === 'failed' ? 'Houve um problema ao tentar enviar esta carta.' : letter.body}
+          </p>
         )}
-      </div>
-      
-      {letter.status === 'scheduled' && (
-        <div className="mb-4 flex items-center">
-          <Clock size={14} className="mr-1 text-primary" />
-          <span className="text-sm">
-            {daysRemaining > 0 
-              ? `${daysRemaining} days remaining` 
-              : 'Delivery is today!'}
-          </span>
-        </div>
-      )}
-      
-      <div className="flex justify-between mt-4">
         {letter.status === 'scheduled' && (
-          <>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => onEdit && onEdit(letter.id)}
-            >
-              <Edit size={14} className="mr-1" /> Edit
-            </Button>
-            <Button 
-              variant="text" 
-              size="sm"
-              onClick={handleDelete}
-              className="text-red-400 hover:text-red-500"
-            >
-              <Trash2 size={14} className="mr-1" /> Delete
-            </Button>
-          </>
+          <p className="text-sm text-gray-400 italic mb-3 flex-grow min-h-[60px]">
+            O conteúdo desta carta é um mistério a ser revelado apenas na data de entrega. Prepare-se para a surpresa!
+          </p>
         )}
-        
-        {letter.status === 'delivered' && (
-          <div className="flex space-x-2">
-            <Button size="sm">View Letter</Button>
-          </div>
-        )}
+
+        <div className="text-xs text-gray-400 mb-4 mt-auto">
+          {letter.status === 'delivered' ? 'Entregue em: ' : 'Entrega Programada para: '} 
+          {new Date(letter.deliveryDate).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
+        </div>
+
+        <div className="flex justify-end space-x-2 border-t border-gray-700 pt-3">
+          {letter.status === 'delivered' && onView && ( // Botão Ver Carta
+            <Button onClick={() => onView(letter)} variant="outline" size="sm" className="text-sm">
+              <Eye size={14} className="mr-1" /> Ver Carta
+            </Button>
+          )}
+          
+          {onDelete && ( // Botão Apagar para todos os status (conforme sua decisão)
+            <Button onClick={onDelete} variant="text" size="sm" className="text-red-400 hover:text-red-500 text-sm">
+              <Trash2 size={14} className="mr-1" /> Apagar
+            </Button>
+          )}
+        </div>
       </div>
-      
-      {/* Floating indicator for status */}
-      <div className={`absolute top-2 right-2 w-2 h-2 rounded-full ${
-        letter.status === 'scheduled' ? 'bg-yellow-500' :
-        letter.status === 'delivered' ? 'bg-green-500' : 
-        'bg-red-500'
-      }`}></div>
     </Card>
   );
 };
