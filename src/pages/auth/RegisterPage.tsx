@@ -2,101 +2,49 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
-// loadStripe não é necessário para MP com init_point
+// supabase não é mais invocado diretamente aqui, o hook faz isso
 import MainLayout from '../../components/layout/MainLayout';
 import Card from '../../components/common/Card';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
-import { Mail, Lock, ArrowRight } from 'lucide-react'; // UserIcon removido, pois não estava sendo usado
+import { Mail, Lock, ArrowRight } from 'lucide-react';
+import useMercadoPagoCheckout from '../../hooks/useMercadoPagoCheckout';
 
 const RegisterPage: React.FC = () => {
   const { register, authState, isAuthenticated } = useAuth();
-  const user = authState.user; // Pega user de authState
+  const user = authState.user;
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [formData, setFormData] = useState({
-    email: '',
-    password: '',
-    confirmPassword: '',
-  });
-  
-  const [formErrors, setFormErrors] = useState({
-    email: '',
-    password: '',
-    confirmPassword: '',
-    general: '',
-  });
+  const { createPreference, isLoading: isProcessingCheckoutHook, error: paymentErrorHook } = useMercadoPagoCheckout();
 
-  const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
-
-  const startMercadoPagoCheckout = async (planIdentifier: string) => {
-    setIsProcessingCheckout(true);
-    setFormErrors(prev => ({ ...prev, general: ''}));
-
-    if (!user) {
-        const noUserError = 'Erro ao obter dados do usuário para o pagamento. Tente fazer login e comprar novamente.';
-        setFormErrors(prev => ({ ...prev, general: noUserError}));
-        setIsProcessingCheckout(false); // <<< CORRIGIDO DE NULL PARA FALSE
-        console.error("[RegisterPage] Tentativa de checkout sem usuário no authState.");
-        return;
-    }
-
-    try {
-      console.log(`[RegisterPage] Usuário ${user.id} autenticado. Chamando create-mp-preference para: ${planIdentifier}`);
-      const { data, error: functionError } = await supabase.functions.invoke('create-mp-preference', {
-        body: { planIdentifier: planIdentifier },
-      });
-
-      if (functionError) {
-        let detailedError = `Erro da função de checkout: ${functionError.message || JSON.stringify(functionError)}`;
-        if (typeof functionError === 'object' && functionError !== null && 'error' in functionError) {
-             detailedError = (functionError as any).error?.message || JSON.stringify(functionError);
-        }
-        throw new Error(detailedError);
-      }
-      if (!data || !data.initPoint) { // Apenas initPoint é crucial para redirecionamento direto
-        console.error("[RegisterPage] Resposta da função create-mp-preference inválida ou sem initPoint. Data:", data);
-        throw new Error('Resposta inválida do servidor ao criar preferência de pagamento (sem initPoint).');
-      }
-
-      console.log("[RegisterPage] Redirecionando para Mercado Pago init_point:", data.initPoint);
-      window.location.href = data.initPoint;
-      // O setIsProcessingCheckout(false) não será chamado se o redirecionamento ocorrer
-    } catch (e: any) {
-      console.error("[RegisterPage] Erro ao processar o início do checkout:", e);
-      setFormErrors(prev => ({ ...prev, general: e.message || "Falha ao iniciar o processo de pagamento."}));
-      setIsProcessingCheckout(false); // <<< CORRIGIDO DE NULL PARA FALSE
-    }
-  };
+  const [formData, setFormData] = useState({ email: '', password: '', confirmPassword: '' });
+  const [formErrors, setFormErrors] = useState({ email: '', password: '', confirmPassword: '', general: '' });
 
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
     const planIdentifierFromUrl = queryParams.get('planIdentifier');
     const planNameFromUrl = queryParams.get('planName');
     
-    console.log("[RegisterPage useEffect] Verificando. Autenticado:", isAuthenticated, "User Plan:", user?.planType, "isLoading Auth:", authState.isLoading, "PriceID URL:", planIdentifierFromUrl);
+    console.log("[RegisterPage useEffect] Verificando. Autenticado:", isAuthenticated, "User Plan:", user?.planType, "isLoading Auth:", authState.isLoading, "PlanID URL:", planIdentifierFromUrl, "isProcessingCheckoutHook:", isProcessingCheckoutHook);
 
-    if (planIdentifierFromUrl && planNameFromUrl && isAuthenticated && user && user.planType === 'none' && !authState.isLoading && !isProcessingCheckout) {
+    if (planIdentifierFromUrl && planNameFromUrl && isAuthenticated && user && user.planType === 'none' && !authState.isLoading && !isProcessingCheckoutHook) {
       console.log(`[RegisterPage useEffect] CONDIÇÕES ATENDIDAS. Iniciando checkout para: ${planIdentifierFromUrl}`);
       navigate(location.pathname, { replace: true }); 
-      startMercadoPagoCheckout(planIdentifierFromUrl);
+      createPreference(planIdentifierFromUrl, planNameFromUrl); 
     } else {
       console.log("[RegisterPage useEffect] Condições para checkout automático NÃO atendidas.");
     }
-  }, [isAuthenticated, user, location, navigate, authState.isLoading, isProcessingCheckout]);
+  }, [isAuthenticated, user, location, navigate, authState.isLoading, createPreference, isProcessingCheckoutHook]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { /* ... como antes ... */ 
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-    if (formErrors[name as keyof typeof formErrors]) {
-      setFormErrors(prev => ({ ...prev, [name]: '' }));
-    }
+    if (formErrors[name as keyof typeof formErrors]) setFormErrors(prev => ({ ...prev, [name]: '' }));
      setFormErrors(prev => ({ ...prev, general: ''}));
   };
   
-  const validateForm = () => { /* ... como antes ... */ 
+  const validateForm = (): boolean => {
     let valid = true;
     const newErrors = { email: '', password: '', confirmPassword: '', general: '' };
     if (!formData.email.trim()) { newErrors.email = 'Email é obrigatório'; valid = false; }
@@ -111,28 +59,24 @@ const RegisterPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormErrors(prev => ({ ...prev, general: ''}));
-    
     if (!validateForm()) return;
     
     try {
-      console.log("[RegisterPage handleSubmit] Chamando register do AuthContext...");
       await register(formData.email, formData.password);
-      console.log("[RegisterPage handleSubmit] Registro no AuthContext CONCLUÍDO (sem erro lançado).");
-      
+      // O useEffect agora lida com o início do checkout se planIdentifier estiver na URL.
+      // Se não houver planIdentifier, e o registro for bem-sucedido, o usuário
+      // será autenticado, e o useEffect não fará nada. Podemos redirecionar para /dashboard/plano
+      // para que ele veja "Nenhum plano ativo" e escolha um.
       const queryParams = new URLSearchParams(location.search);
-      if (!queryParams.get('planIdentifier') && !isProcessingCheckout) { 
-          console.log("[RegisterPage handleSubmit] Sem planIdentifier na URL e não processando checkout, navegando para /dashboard/plano");
+      if (!queryParams.get('planIdentifier') && !isProcessingCheckoutHook) { 
           navigate('/dashboard/plano');
       }
-      // Se tem planIdentifier, o useEffect cuidará do checkout.
     } catch (error: any) {
-      console.error('[RegisterPage handleSubmit] Erro no registro CAPTURADO:', error);
-      setFormErrors(prev => ({ ...prev, general: error.message || 'Falha no registro. Verifique os dados ou tente um email diferente.'}));
+      setFormErrors(prev => ({ ...prev, general: error.message || 'Falha no registro.'}));
     }
   };
   
   return (
-    // ... JSX do formulário de registro como antes, ele estava bom ...
     <MainLayout hideFooter>
       <div className="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
@@ -149,7 +93,12 @@ const RegisterPage: React.FC = () => {
                 {formErrors.general}
               </div>
             )}
-
+            {/* Mostra o erro do hook de pagamento se ele existir e não houver erro de formulário geral */}
+            {paymentErrorHook && !formErrors.general && ( 
+                <div className="mb-4 p-3 bg-red-500/20 border border-red-500/50 rounded-md text-red-400 text-sm">
+                    Erro ao iniciar pagamento: {paymentErrorHook}
+                </div>
+            )}
             <form className="space-y-6" onSubmit={handleSubmit}>
               <div>
                 <label htmlFor="email" className="block text-text-secondary mb-2 flex items-center">
@@ -191,8 +140,8 @@ const RegisterPage: React.FC = () => {
               <Button
                 type="submit"
                 className="w-full flex items-center justify-center"
-                isLoading={authState.isLoading || isProcessingCheckout}
-                disabled={authState.isLoading || isProcessingCheckout}
+                isLoading={authState.isLoading || isProcessingCheckoutHook}
+                disabled={authState.isLoading || isProcessingCheckoutHook}
               >
                 <span>Criar Conta e Continuar</span>
                 <ArrowRight className="ml-2 w-4 h-4" />

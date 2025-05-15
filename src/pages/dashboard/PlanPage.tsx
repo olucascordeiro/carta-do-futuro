@@ -1,26 +1,67 @@
 // src/pages/dashboard/PlanPage.tsx
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import useMercadoPagoCheckout from '../../hooks/useMercadoPagoCheckout';
 import { Award, ShoppingCart, Tag, AlertCircle } from 'lucide-react';
 
+// Defina a interface para as features aqui ou importe de PricingCard se exportada
+interface PricingFeature {
+  text: string;
+  included: boolean;
+}
+
 const PlanPage: React.FC = () => {
-  const { authState } = useAuth();
+  const { authState, refreshUserProfile } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = authState;
 
-  // Um estado de loading para todos os botões de pagamento/upgrade nesta página
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const [generalError, setGeneralError] = useState<string | null>(null);
+  const { createPreference, isLoading: isProcessingCheckoutHook, error: paymentErrorHook } = useMercadoPagoCheckout();
+  const [processingAction, setProcessingAction] = useState<string | null>(null);
+  const [pageMessage, setPageMessage] = useState<{text: string, type: 'success' | 'error' | 'info'} | null>(null);
 
-  // Identificadores dos planos (devem corresponder aos da Edge Function create-mp-preference)
-  const PLAN_ID_BASICO_MP = 'basic_plan_23';       // Para recompra do plano básico (R$23)
-  const PLAN_ID_COMPLETO_MP = 'full_plan_30';      // Para comprar o completo se o básico expirou (R$30)
-  const PLAN_ID_UPGRADE_MP = 'upgrade_basic_to_full_7'; // Para upgrade do básico ativo para completo (R$7)
+  const PLAN_ID_BASICO_INTERNAL = 'basic_plan_23';
+  const PLAN_ID_COMPLETO_INTERNAL = 'full_plan_30';
+  const PLAN_ID_UPGRADE_INTERNAL = 'upgrade_basic_to_full_7';
+
+  // MOVER A DECLARAÇÃO DE basicFeatures e fullFeatures PARA CÁ
+  const basicFeatures: PricingFeature[] = [
+    { text: 'Cartas apenas com texto', included: true },
+    { text: 'Acesso ao painel por 1 ano a partir da data da compra', included: true },
+    { text: 'Agendamento de cartas para até 1 ano no futuro', included: true },
+    { text: 'Suporte padrão por email', included: true },
+    { text: 'Anexar mídia (vídeo, áudio)', included: false }, // Corrigido para corresponder ao plano
+    { text: 'Acesso vitalício ao painel', included: false },
+  ];
+  const fullFeatures: PricingFeature[] = [
+    { text: 'Cartas com texto, áudio e vídeo', included: true },
+    { text: 'Acesso vitalício ao painel', included: true },
+    { text: 'Agendamento de cartas para até 1 ano no futuro', included: true },
+    { text: 'Suporte prioritário por email', included: true },
+  ];
+
+  useEffect(() => {
+    const queryParams = new URLSearchParams(location.search);
+    const paymentStatus = queryParams.get('pagamento');
+    const compra = queryParams.get('compra');
+
+    if (paymentStatus === 'sucesso_mp') {
+      setPageMessage({text: `Pagamento para "${compra || 'seu novo plano'}" processado com sucesso! Atualizando seu plano...`, type: 'success'});
+      refreshUserProfile().then(() => {
+        navigate(location.pathname, { replace: true }); 
+      });
+    } else if (paymentStatus === 'falha_mp') {
+      setPageMessage({text: `Ocorreu uma falha no pagamento para "${compra || 'seu plano'}". Por favor, tente novamente ou contate o suporte.`, type: 'error'});
+      navigate(location.pathname, { replace: true });
+    } else if (paymentStatus === 'pendente_mp') {
+      setPageMessage({text: `Seu pagamento para "${compra || 'seu plano'}" está pendente. Aguarde a confirmação.`, type: 'info'});
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.search, refreshUserProfile, navigate]);
 
   const formatDate = (date: Date | null | undefined): string => {
     if (!date) return 'N/D';
@@ -32,96 +73,59 @@ const PlanPage: React.FC = () => {
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
 
-  let planStatusText = "Ativo";
+  let planStatusText = ""; // Inicializar vazio
   let planStatusColor = "";
   let isPlanExpired = false;
-
-  if (user?.planType === 'basic' && user.accessExpiresAt && new Date(user.accessExpiresAt) < hoje) {
-    planStatusText = "Expirado";
-    planStatusColor = 'bg-red-500/20 text-red-400';
-    isPlanExpired = true;
-  } else if (user?.planType === 'full') {
-    planStatusText = "Ativo (Vitalício)";
-    planStatusColor = 'bg-green-500/20 text-green-400';
-  } else if (user?.planType === 'basic') {
-    planStatusText = "Ativo";
-    planStatusColor = 'bg-yellow-500/20 text-yellow-400';
-  }
-  
-  const startMercadoPagoCheckout = async (planIdentifierForFunction: string) => {
-    if (!user) {
-      setGeneralError("Usuário não autenticado. Por favor, faça login novamente.");
-      return;
-    }
-    setGeneralError(null);
-    setIsProcessingPayment(true);
-
-    try {
-      console.log(`[PlanPage] Usuário ${user.id}. Chamando create-mp-preference para: ${planIdentifierForFunction}`);
-      const { data, error: functionError } = await supabase.functions.invoke('create-mp-preference', {
-        body: { planIdentifier: planIdentifierForFunction },
-      });
-
-      if (functionError) {
-        let detailedError = `Erro ao invocar função de checkout: ${functionError.message || JSON.stringify(functionError)}`;
-        if (typeof functionError === 'object' && functionError !== null && 'error' in functionError && (functionError as any).error?.message) {
-             detailedError = (functionError as any).error.message;
-        }
-        throw new Error(detailedError);
-      }
-      if (!data || !data.initPoint) {
-        throw new Error('Resposta inválida do servidor (sem init_point do Mercado Pago).');
-      }
-
-      console.log("[PlanPage] Redirecionando para Mercado Pago init_point:", data.initPoint);
-      window.location.href = data.initPoint;
-      // Se o redirecionamento ocorrer, o setIsProcessingPayment(false) no finally não será chamado, o que é ok.
-    } catch (e: any) {
-      console.error("[PlanPage] Erro ao processar checkout:", e);
-      setGeneralError(e.message || "Falha ao iniciar o processo de pagamento.");
-      setIsProcessingPayment(false); // Limpa o loading em caso de erro antes do redirecionamento
-    }
-    // Não colocar setIsProcessingPayment(false) no finally aqui, pois o redirecionamento deve acontecer.
-    // Se o redirecionamento falhar, o catch já lida com isso.
-  };
-  
-  const handleChoosePlan = () => { navigate('/#pricing'); }; // Para usuários com planType 'none'
-
-  const basicFeatures = [
-    "Cartas apenas com texto",
-    "Acesso ao painel por 1 ano a partir da data da compra",
-    "Agendamento de cartas para até 1 ano no futuro",
-    "Suporte padrão por email",
-  ];
-  const fullFeatures = [
-    "Cartas com texto, áudio e vídeo",
-    "Acesso vitalício ao painel",
-    "Agendamento de cartas para até 1 ano no futuro",
-    "Suporte prioritário por email",
-  ];
-
-  let currentPlanFeatures: string[] = [];
+  let currentPlanFeatures: PricingFeature[] = []; // Tipo CORRIGIDO
   let planNameDisplay = "Nenhum plano ativo";
-  let planDescription = "Você ainda não possui um plano ativo. Escolha um para começar!";
+  let planDescription = "Você ainda não possui um plano ativo. Visite nossa página de planos para começar!";
 
-  if (user) {
+  if (user) { // Toda lógica que depende de 'user' vai aqui dentro
+    planStatusText = "Ativo"; // Default se tiver plano e não for 'none'
     if (user.planType === 'basic') {
       planNameDisplay = "Plano Básico";
-      currentPlanFeatures = basicFeatures;
-      if (isPlanExpired) {
+      currentPlanFeatures = basicFeatures; // AGORA basicFeatures já está definido
+      if (user.accessExpiresAt && new Date(user.accessExpiresAt) < hoje) {
+        planStatusText = "Expirado";
+        planStatusColor = 'bg-red-500/20 text-red-400';
+        isPlanExpired = true;
         planDescription = `Seu acesso ao Plano Básico EXPIROU em ${formatDate(user.accessExpiresAt)}. Considere adquirir um novo plano ou fazer um upgrade.`;
       } else {
+        planStatusColor = 'bg-yellow-500/20 text-yellow-400';
         planDescription = `Seu acesso ao Plano Básico é válido até ${formatDate(user.accessExpiresAt)}.`;
       }
     } else if (user.planType === 'full') {
       planNameDisplay = "Plano Completo";
-      currentPlanFeatures = fullFeatures;
+      currentPlanFeatures = fullFeatures; // AGORA fullFeatures já está definido
+      planStatusText = "Ativo (Vitalício)";
+      planStatusColor = 'bg-green-500/20 text-green-400';
       planDescription = "Você possui acesso vitalício a todos os recursos!";
+    } else if (user.planType === 'none') {
+        // planNameDisplay e planDescription já são default para 'none'
+        planStatusText = ""; 
+        planStatusColor = "";
     }
   }
+  
+  const handlePaymentAction = async (planIdentifier: string, planDisplayName: string) => {
+    if (!user) {
+      setPageMessage({text: "Usuário não autenticado.", type: 'error'});
+      return;
+    }
+    setPageMessage(null);
+    setProcessingAction(planIdentifier);
+    
+    await createPreference(planIdentifier, planDisplayName);
+    
+    if (paymentErrorHook) { 
+        setProcessingAction(null);
+    }
+  };
+  
+  const handleChoosePlan = () => { navigate('/#pricing'); };
 
-  // Lógica de Retorno Antecipado (Loading, !user)
-  if (authState.isLoading) {
+  // ----- Lógica de Retorno Antecipado -----
+  if (authState.isLoading && !user) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center min-h-[300px]">
@@ -131,7 +135,8 @@ const PlanPage: React.FC = () => {
     );
   }
 
-  if (!user) {
+  // Se terminou de carregar authState e user ainda é null, algo está errado com AuthContext ou o usuário não logou.
+  if (!user && !authState.isLoading) {
     return (
       <DashboardLayout>
         <div className="text-center max-w-md mx-auto py-10">
@@ -145,8 +150,9 @@ const PlanPage: React.FC = () => {
       </DashboardLayout>
     );
   }
+  // A PARTIR DESTE PONTO, user DEVE SER um objeto User válido (não nulo).
+  // O TypeScript pode não inferir isso em todos os lugares, então user! ou user?. pode ser necessário no JSX.
 
-  // Renderização Principal da Página
   return (
     <DashboardLayout>
       <div className="mb-8">
@@ -156,11 +162,23 @@ const PlanPage: React.FC = () => {
         </p>
       </div>
 
-      {generalError && (
-        <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 text-red-300 rounded-md text-center text-sm">
-            {generalError}
+      
+{/* Exibição de Mensagens (Redirect ou Erro do Hook) */}
+
+        {pageMessage && (
+        <div className={`mb-6 p-4 border rounded-md text-sm ${
+        pageMessage.type === 'success' ? 'bg-green-500/20 border-green-500/50 text-green-300' :
+        pageMessage.type === 'error' ? 'bg-red-500/20 border-red-500/50 text-red-400' :
+        'bg-yellow-500/20 border-yellow-500/50 text-yellow-300' // info
+        }`}>
+        {pageMessage.text}
         </div>
-      )}
+        )}
+        {paymentErrorHook && !pageMessage && (
+        <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 text-red-300 rounded-md text-center text-sm">
+        Erro no pagamento: {paymentErrorHook}
+        </div>
+        )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
@@ -170,16 +188,17 @@ const PlanPage: React.FC = () => {
               <h2 className="text-xl font-serif">Detalhes do seu Plano</h2>
             </div>
 
-            {user.planType === 'none' ? (
+            {/* Garante que user existe antes de acessar user.planType */}
+            {user && user.planType === 'none' ? ( 
               <div className="text-center py-8">
                 <Tag size={48} className="text-text-muted mx-auto mb-4" />
                 <h3 className="text-xl font-semibold mb-2">{planNameDisplay}</h3>
                 <p className="text-text-secondary mb-6">{planDescription}</p>
-                <Button onClick={handleChoosePlan} size="lg" disabled={isProcessingPayment}>
+                <Button onClick={handleChoosePlan} size="lg" disabled={isProcessingCheckoutHook}>
                   Escolher um Plano
                 </Button>
               </div>
-            ) : (
+            ) : user && ( // Garante que user existe para o bloco <>
               <>
                 <div className="bg-background-dark p-6 rounded-md mb-8">
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -187,9 +206,12 @@ const PlanPage: React.FC = () => {
                       <span className="text-2xl text-primary font-medium block mb-1">{planNameDisplay}</span>
                       <p className="text-text-secondary text-sm">{planDescription}</p>
                     </div>
-                    <div className={`self-start sm:self-center px-3 py-1 rounded-full text-sm font-medium ${planStatusColor}`}>
-                        {planStatusText}
-                    </div>
+                    {/* Só mostra a tag de status se não for 'none' */}
+                    {user.planType !== 'none' && ( 
+                        <div className={`self-start sm:self-center px-3 py-1 rounded-full text-sm font-medium ${planStatusColor}`}>
+                            {planStatusText}
+                        </div>
+                    )}
                   </div>
                 </div>
 
@@ -201,7 +223,7 @@ const PlanPage: React.FC = () => {
                         <div className={`rounded-full p-1 mr-3 ${isPlanExpired ? 'bg-red-500/20 text-red-400' : 'bg-primary/20 text-primary'}`}>
                            <Award size={14} />
                         </div>
-                        <span className={isPlanExpired ? 'text-text-muted line-through' : 'text-text-secondary'}>{feature}</span>
+                        <span className={isPlanExpired ? 'text-text-muted line-through' : 'text-text-secondary'}>{feature.text}</span>
                       </li>
                     ))}
                   </ul>
@@ -219,22 +241,22 @@ const PlanPage: React.FC = () => {
                     </p>
                     {isPlanExpired && ( 
                       <Button 
-                        onClick={() => startMercadoPagoCheckout(PLAN_ID_BASICO_MP)} 
+                        onClick={() => handlePaymentAction(PLAN_ID_BASICO_INTERNAL, 'Plano Básico')}
                         className="w-full sm:w-auto mb-3" 
                         variant='outline'
-                        isLoading={isProcessingPayment}
-                        disabled={isProcessingPayment}
+                        isLoading={isProcessingCheckoutHook && processingAction === PLAN_ID_BASICO_INTERNAL}
+                        disabled={isProcessingCheckoutHook}
                       >
                         Reativar Plano Básico (R$ 23,00)
                       </Button>
                     )}
                     <Button 
-                      onClick={() => startMercadoPagoCheckout(isPlanExpired ? PLAN_ID_COMPLETO_MP : PLAN_ID_UPGRADE_MP)} 
+                      onClick={() => handlePaymentAction(isPlanExpired ? PLAN_ID_COMPLETO_INTERNAL : PLAN_ID_UPGRADE_INTERNAL, isPlanExpired ? 'Plano Completo' : 'Upgrade para Completo')} 
                       className="w-full sm:w-auto" 
                       variant="primary" 
                       size="lg"
-                      isLoading={isProcessingPayment}
-                      disabled={isProcessingPayment}
+                      isLoading={isProcessingCheckoutHook && (processingAction === (isPlanExpired ? PLAN_ID_COMPLETO_INTERNAL : PLAN_ID_UPGRADE_INTERNAL))}
+                      disabled={isProcessingCheckoutHook}
                     >
                       <ShoppingCart className="mr-2" size={18}/>
                       {isPlanExpired ? "Adquirir Plano Completo (R$ 30,00)" : "Fazer Upgrade Agora (R$ 7,00)"}
@@ -246,7 +268,9 @@ const PlanPage: React.FC = () => {
           </Card>
         </div>
 
-        {(user.planType === 'basic' || user.planType === 'full') && (
+        {/* Sidebar "Resumo da Conta" */}
+        {/* Adicionada checagem 'user &&' aqui também */}
+        {user && (user.planType === 'basic' || user.planType === 'full') && (
           <div className="lg:col-span-1">
             <Card className="bg-background-dark sticky top-24">
               <h2 className="text-xl font-serif mb-6 border-b border-primary/10 pb-4">Resumo da Conta</h2>
@@ -255,12 +279,14 @@ const PlanPage: React.FC = () => {
                   <h3 className="text-text-muted text-sm font-medium mb-1">Tipo do Plano</h3>
                   <p className="font-semibold text-lg">{planNameDisplay}</p>
                 </div>
+                {/* Adicionada checagem user.purchasedAt */}
                 {user.purchasedAt && (
                    <div>
                      <h3 className="text-text-muted text-sm font-medium mb-1">Plano Adquirido em</h3>
                      <p className="font-semibold">{formatDate(user.purchasedAt)}</p>
                    </div>
                 )}
+                {/* Adicionada checagem user.accessExpiresAt */}
                 {user.planType === 'basic' && user.accessExpiresAt && (
                   <div>
                     <h3 className="text-text-muted text-sm font-medium mb-1">
